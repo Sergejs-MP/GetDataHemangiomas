@@ -6,16 +6,11 @@ using System.Reflection;
 using VMS.TPS.Common.Model.API;
 using VMS.TPS.Common.Model.Types;
 using System.IO;
-using static VMS.TPS.Common.Model.Types.DoseValue;
 using System.Globalization;
 
-// TODO: Replace the following version attributes by creating AssemblyInfo.cs. You can do this in the properties of the Visual Studio project.
 [assembly: AssemblyVersion("1.0.0.1")]
 [assembly: AssemblyFileVersion("1.0.0.1")]
 [assembly: AssemblyInformationalVersion("1.0")]
-
-// TODO: Uncomment the following line if the script requires write access.
-// [assembly: ESAPIScript(IsWriteable = true)]
 
 namespace GetDataHemangiomas
 {
@@ -24,26 +19,42 @@ namespace GetDataHemangiomas
         // ======= CONFIG =======
         private const double DVH_BIN_GY = 0.01;
 
-        // Targets gEUD parameter (cold-spot sensitive)
+        // gEUD parameters
         private const double A_TARGET = -10.0;
-
-        // Brain / Brain-GTV gEUD parameter (typical OAR-like, hot-spot sensitive)
         private const double A_BRAIN = 4.0;
 
-        // Threshold for Brain-GTV Vx
+        // Brain-GTV Vx threshold
         private const double VX_BRAIN_MINUS_GTV_GY = 32.0;
 
-        // Structure alias maps (Id or Name contains any of these, case-insensitive)
-        private static readonly string[] ALIAS_GTV = { "gtv" };
-        private static readonly string[] ALIAS_CTV = { "ctv" };
-        private static readonly string[] ALIAS_PTV = { "ptv" };
+        // Candidate structure search patterns
+        private static readonly string[] ALIAS_TARGETS =
+        {
+            "gtv", "ctv", "ptv"
+        };
 
-        private static readonly string[] ALIAS_BRAIN = { "brain", "gehirn", "cerebrum" };
-        private static readonly string[] ALIAS_BRAINSTEM = { "brainstem", "gehirnstamm", "medulla" };
-        private static readonly string[] ALIAS_CHIASM = { "chiasm", "chiasma", "chiasma opticum", "optical chiasm", "opt chiasm" };
+        private static readonly string[] ALIAS_BRAIN =
+        {
+            "brain", "gehirn", "cerebrum"
+        };
 
-        // Actual Brain-GTV structure (e.g., "Brain-GTV")
-        private static readonly string[] ALIAS_BRAIN_MINUS_GTV = { "brain-gtv", "brain_minus_gtv", "gehirn-gtv" };
+        private static readonly string[] ALIAS_BRAINSTEM =
+        {
+            "brainstem", "gehirnstamm", "medulla"
+        };
+
+        private static readonly string[] ALIAS_CHIASM =
+        {
+            "chiasm", "chiasma", "opt chiasm", "chiasma opticum"
+        };
+
+        private static readonly string[] ALIAS_BRAIN_MINUS_GTV =
+        {
+            "brain-gtv", "brain_minus_gtv"
+        };
+
+        // ======================
+        //        MAIN()
+        // ======================
 
         [STAThread]
         static void Main(string[] args)
@@ -52,17 +63,17 @@ namespace GetDataHemangiomas
             {
                 if (args.Length < 2)
                 {
-                    Console.WriteLine("Usage: ESAPI_PlanStats.exe <inputPatients.csv> <output.csv>");
+                    Console.WriteLine("Usage: GetDataHemangiomas.exe <input.csv> <output.csv>");
                     return;
                 }
 
-                var inputCsv = args[0];
-                var outputCsv = args[1];
+                string inputCsv = args[0];
+                string outputCsv = args[1];
 
-                var patientIds = LoadPatientIds(inputCsv);
-                if (patientIds.Count == 0)
+                var triples = LoadPatientCoursePlanTriples(inputCsv);
+                if (triples.Count == 0)
                 {
-                    Console.WriteLine("No patient IDs found in input CSV.");
+                    Console.WriteLine("!! No valid entries in input CSV");
                     return;
                 }
 
@@ -71,54 +82,98 @@ namespace GetDataHemangiomas
 
                 using (var app = Application.CreateApplication())
                 {
-                    foreach (var pid in patientIds)
+                    foreach (var (pid, courseId, planId) in triples)
                     {
-                        Console.WriteLine($"Processing PatientID: {pid}");
-                        Patient patient = null;
+                        Console.WriteLine($"Processing {pid}  {courseId}  {planId}");
+
+                        Patient p = null;
+
                         try
                         {
-                            patient = app.OpenPatientById(pid);
-                            if (patient == null)
+                            p = app.OpenPatientById(pid);
+                            if (p == null)
                             {
-                                Console.WriteLine($"  ! Could not open patient {pid} (null). Skipping.");
+                                Console.WriteLine($"!! Cannot open patient {pid}");
                                 continue;
                             }
 
-                            foreach (var course in patient.Courses ?? Enumerable.Empty<Course>())
+                            var course = p.Courses
+                                .FirstOrDefault(c => c.Id.Equals(courseId, StringComparison.OrdinalIgnoreCase));
+
+                            if (course == null)
                             {
-                                foreach (var plan in course.PlanSetups.Where(x => !x.Id.ToUpper()
-                                    .Contains("QA(")) ?? Enumerable.Empty<PlanSetup>())
-                                {
-                                    var line = ProcessPlan(patient, course, plan);
-                                    if (line != null)
-                                        rows.Add(line);
-                                }
+                                Console.WriteLine($"!! Course {courseId} not found for patient {pid}");
+                                continue;
                             }
+
+                            var plan = course.PlanSetups
+                                .FirstOrDefault(pl => pl.Id.Equals(planId, StringComparison.OrdinalIgnoreCase));
+
+                            if (plan == null)
+                            {
+                                Console.WriteLine($"!! Plan {planId} not found in course {courseId}");
+                                continue;
+                            }
+
+                            string row = ProcessPlan(p, course, plan);
+                            if (row != null)
+                                rows.Add(row);
                         }
                         catch (Exception ex)
                         {
-                            Console.WriteLine($"  ! Error on patient {pid}: {ex.Message}");
+                            Console.WriteLine($"Error on {pid}/{courseId}/{planId}: {ex.Message}");
                         }
                         finally
                         {
-                            if (patient != null)
+                            if (p != null)
                                 app.ClosePatient();
                         }
                     }
                 }
 
                 File.WriteAllLines(outputCsv, rows, Encoding.UTF8);
-                Console.WriteLine($"Done. Wrote {rows.Count - 1} plan rows to {outputCsv}");
+                Console.WriteLine($"Done. Exported {rows.Count - 1} plans.");
             }
             catch (Exception ex)
             {
-                Console.WriteLine("Fatal error: " + ex);
+                Console.WriteLine("Fatal error: " + ex.ToString());
             }
         }
 
+        // ======================
+        //      CSV LOADER
+        // ======================
+
+        private static List<(string pid, string course, string plan)> LoadPatientCoursePlanTriples(string csv)
+        {
+            var list = new List<(string, string, string)>();
+
+            foreach (var raw in File.ReadAllLines(csv))
+            {
+                if (string.IsNullOrWhiteSpace(raw)) continue;
+
+                var parts = raw.Split(',');
+                if (parts.Length < 3) continue;
+
+                var pid = parts[0].Trim();
+                var course = parts[1].Trim();
+                var plan = parts[2].Trim();
+
+                // skip header
+                if (pid.ToLower().Contains("patient")) continue;
+
+                list.Add((pid, course, plan));
+            }
+
+            return list;
+        }
+
+        // ======================
+        //     HEADER FOR CSV
+        // ======================
+
         private static string GetHeaderLine()
         {
-            // Includes Brain/Brain-GTV gEUDs and Brain-GTV V32Gy
             var cols = new[]
             {
                 "PatientID","CourseID","PlanID","PrescriptionID","PrescriptionDetails","Anz_Fx",
@@ -132,28 +187,13 @@ namespace GetDataHemangiomas
                 "Chiasma_Volume","Chiasm_D2","Chiasm_D50",
                 "Brain_gEUD_a4","BrainMinusGTV_gEUD_a4","BrainMinusGTV_V32Gy_cm3"
             };
+
             return string.Join(",", cols);
         }
 
-        private static List<string> LoadPatientIds(string inputCsv)
-        {
-            var ids = new List<string>();
-            foreach (var raw in File.ReadAllLines(inputCsv))
-            {
-                var line = raw?.Trim();
-                if (string.IsNullOrWhiteSpace(line)) continue;
-
-                // Take first non-empty CSV field as patient ID
-                var first = line.Split(',').FirstOrDefault()?.Trim();
-                if (string.IsNullOrWhiteSpace(first)) continue;
-
-                // Skip header lines
-                if (first.ToLowerInvariant().Contains("patient")) continue;
-
-                ids.Add(first);
-            }
-            return ids.Distinct().ToList();
-        }
+        // ======================
+        //  PROCESS A SINGLE PLAN
+        // ======================
 
         private static string ProcessPlan(Patient patient, Course course, PlanSetup plan)
         {
@@ -161,160 +201,329 @@ namespace GetDataHemangiomas
             string courseId = course.Id ?? "";
             string planId = plan.Id ?? "";
 
-            // Prescription details
+            // Prescription
             string rxId = plan.RTPrescription?.Id ?? "";
             int? nFx = plan.NumberOfFractions;
-            double? dpfGy = plan.DosePerFraction.Dose;
-            double? totalDoseGy = plan.TotalDose.Dose;
+            double? dpf = plan.DosePerFraction?.Dose;
+            double? total = plan.TotalDose?.Dose;
 
-            if (!dpfGy.HasValue && totalDoseGy.HasValue && nFx.HasValue && nFx.Value > 0)
-                dpfGy = totalDoseGy.Value / nFx.Value;
+            if (!dpf.HasValue && total.HasValue && nFx.HasValue && nFx > 0)
+                dpf = total / nFx;
 
-            string rxDetails = BuildRxDetails(dpfGy, nFx, totalDoseGy);
+            string rxDetails = BuildRxDetails(dpf, nFx, total);
 
-            // Structure set
+            // No structure set => empty row
+            if (plan.StructureSet == null)
+                return BuildEmptyPlanRow(pid, courseId, planId, rxId, rxDetails, nFx);
+
             var ss = plan.StructureSet;
-            if (ss == null)
-            {
-                return CsvLine(new[]
-                {
-                    pid, courseId, planId, rxId, rxDetails, nFx?.ToString() ?? "",
-                    "", "", "",                          // GTV/CTV/PTV volumes
-                    "", "", "", "", "", "", "", "", "",   // DVH targets
-                    "", "", "",                          // gEUD targets
-                    "", "", "",                          // Brain vol/doses
-                    "", "", "",                          // Brainstem vol/doses
-                    "", "", "",                          // Chiasm vol/doses
-                    "", "", ""                           // Brain gEUD, Brain-GTV gEUD, Brain-GTV V32
-                });
-            }
 
-            // Find structures
-            var (gtv, ctv, ptv) = (
-                FindFirst(ss, ALIAS_GTV),
-                FindFirst(ss, ALIAS_CTV),
-                FindFirst(ss, ALIAS_PTV)
-            );
+            // =========================
+            // Find target structures
+            // =========================
 
-            var brain = FindFirst(ss, ALIAS_BRAIN);
-            var brainstem = FindFirst(ss, ALIAS_BRAINSTEM);
-            var chiasm = FindFirst(ss, ALIAS_CHIASM);
-            var brainMinusGtv = FindFirst(ss, ALIAS_BRAIN_MINUS_GTV);
+            // prefix-based expected names
+            string prefix = planId.Length >= 2 ? planId.Substring(0, 2) : planId;
 
-            // If no dose: just output volumes
+            string gtvName = $"{prefix}_GTV";
+            string ctvName = $"{prefix}_CTV";
+            string ptvName = $"{prefix}_PTV";
+
+            Structure gtv = FindExactStructure(ss, gtvName);
+            Structure ctv = FindExactStructure(ss, ctvName);
+            Structure ptv = FindExactStructure(ss, ptvName);
+
+            // OARs
+            Structure brain = FindByAlias(ss, ALIAS_BRAIN);
+            Structure brainstem = FindByAlias(ss, ALIAS_BRAINSTEM);
+            Structure chiasm = FindByAlias(ss, ALIAS_CHIASM);
+            Structure brainMinusGtv = FindByAlias(ss, ALIAS_BRAIN_MINUS_GTV);
+
+            bool missingTargets = (gtv == null || ctv == null || ptv == null);
+
+            // DVH unavailable => output volume-only row
             if (plan.Dose == null || !plan.IsDoseValid)
-            {
-                return CsvLine(new[]
-                {
-                    pid, courseId, planId, rxId, rxDetails, nFx?.ToString() ?? "",
-                    VolStr(gtv), VolStr(ctv), VolStr(ptv),
-                    "", "", "", "", "", "", "", "", "",
-                    "", "", "",
-                    VolStr(brain), "", "",
-                    VolStr(brainstem), "", "",
-                    VolStr(chiasm), "", "",
-                    "", "", ""
-                });
-            }
+                return BuildDoseMissingRow(pid, courseId, planId, rxId, rxDetails, nFx, gtv, ctv, ptv, brain, brainstem, chiasm);
 
             var dvh = new DvhHelper(plan);
 
-            // Targets
-            var (gtvD50, gtvD98, gtvD2, gtvGeud) = DoseTripletAndGeud(dvh, gtv, isTarget: true);
-            var (ctvD50, ctvD98, ctvD2, ctvGeud) = DoseTripletAndGeud(dvh, ctv, isTarget: true);
-            var (ptvD50, ptvD98, ptvD2, ptvGeud) = DoseTripletAndGeud(dvh, ptv, isTarget: true);
+            // If missing => fallback candidate extraction
+            if (missingTargets)
+            {
+                var candidates = FindCandidateTargets(ss);
 
-            // OAR basics
-            var (brainD2, brainD50) = D2D50(dvh, brain);
+                // Write full dosimetry for all candidates
+                foreach (var s in candidates)
+                {
+                    WriteCandidateStructureDose(
+                        "CandidateStructures",
+                        patient,
+                        course,
+                        plan,
+                        s,
+                        dvh
+                    );
+                }
+
+                // Optional: auto-select best
+                if (gtv == null)
+                    gtv = candidates.FirstOrDefault(s => s.Id.ToLower().Contains("gtv"));
+
+                if (ctv == null)
+                    ctv = candidates
+                        .Where(s => s.Id.ToLower().Contains("ctv"))
+                        .OrderByDescending(s => s.Volume)
+                        .FirstOrDefault();
+
+                if (ptv == null)
+                    ptv = candidates
+                        .Where(s => s.Id.ToLower().Contains("ptv"))
+                        .OrderByDescending(s => s.Volume)
+                        .FirstOrDefault();
+            }
+            // ====== TARGET DOSE METRICS ======
+            var (gtvD50, gtvD98, gtvD2, gtvGeud) = DoseTripletAndGeud(dvh, gtv);
+            var (ctvD50, ctvD98, ctvD2, ctvGeud) = DoseTripletAndGeud(dvh, ctv);
+            var (ptvD50, ptvD98, ptvD2, ptvGeud) = DoseTripletAndGeud(dvh, ptv);
+
+            // ====== OAR DOSE METRICS ======
+            var (brainD2, brainD50)         = D2D50(dvh, brain);
             var (brainstemD2, brainstemD50) = D2D50(dvh, brainstem);
-            var (chiasmD2, chiasmD50) = D2D50(dvh, chiasm);
+            var (chiasmD2, chiasmD50)       = D2D50(dvh, chiasm);
 
-            // Brain gEUD (a=4)
-            double? brain_gEUD_a4 = dvh.gEUD(brain, A_BRAIN);
-
-            // Brain-GTV metrics on actual Brain-GTV structure
+            double? brain_gEUD_a4         = dvh.gEUD(brain, A_BRAIN);
             double? brainMinusGtv_gEUD_a4 = dvh.gEUD(brainMinusGtv, A_BRAIN);
-            double? brainMinusGtv_V32 = dvh.VxCm3(brainMinusGtv, VX_BRAIN_MINUS_GTV_GY);
+            double? brainMinusGtv_V32     = dvh.VxCm3(brainMinusGtv, VX_BRAIN_MINUS_GTV_GY);
+
+            // ====== BUILD MAIN CSV ROW ======
 
             return CsvLine(new[]
             {
-                pid, courseId, planId, rxId, rxDetails, nFx?.ToString() ?? "",
+                pid, courseId, planId,
+                rxId, rxDetails,
+                nFx?.ToString() ?? "",
+
                 VolStr(gtv), VolStr(ctv), VolStr(ptv),
+
                 DStr(gtvD50), DStr(gtvD98), DStr(gtvD2),
                 DStr(ctvD50), DStr(ctvD98), DStr(ctvD2),
                 DStr(ptvD50), DStr(ptvD98), DStr(ptvD2),
+
                 DStr(gtvGeud), DStr(ctvGeud), DStr(ptvGeud),
+
                 VolStr(brain), DStr(brainD2), DStr(brainD50),
                 VolStr(brainstem), DStr(brainstemD2), DStr(brainstemD50),
                 VolStr(chiasm), DStr(chiasmD2), DStr(chiasmD50),
-                DStr(brain_gEUD_a4), DStr(brainMinusGtv_gEUD_a4), DStr(brainMinusGtv_V32)
+
+                DStr(brain_gEUD_a4),
+                DStr(brainMinusGtv_gEUD_a4),
+                DStr(brainMinusGtv_V32)
             });
         }
 
-        private static string BuildRxDetails(double? dpfGy, int? nFx, double? totalGy)
+        // =======================
+        //     FALLBACK EXPORT
+        // =======================
+
+        private static List<Structure> FindCandidateTargets(StructureSet ss)
         {
-            string fx = nFx.HasValue ? nFx.Value.ToString() : "?";
-            string dpf = dpfGy.HasValue ? dpfGy.Value.ToString("0.###", CultureInfo.InvariantCulture) : "?";
-            string tot = totalGy.HasValue ? totalGy.Value.ToString("0.###", CultureInfo.InvariantCulture) : "?";
-            return $"{tot} Gy total; {fx}×{dpf} Gy";
+            if (ss == null || ss.Structures == null) return new List<Structure>();
+
+            return ss.Structures
+                .Where(s =>
+                    !s.IsEmpty &&
+                    ALIAS_TARGETS.Any(t =>
+                        s.Id.ToLower().Contains(t) ||
+                        s.Name.ToLower().Contains(t)))
+                .ToList();
         }
 
+        private static void WriteCandidateStructureDose(
+            string folder,
+            Patient pat,
+            Course course,
+            PlanSetup plan,
+            Structure s,
+            DvhHelper dvh)
+        {
+            Directory.CreateDirectory(folder);
+
+            string file = Path.Combine(folder, $"{pat.Id}_CandidateTargets.csv");
+
+            double? d2  = dvh.DoseAtVolumePercent(s, 2);
+            double? d50 = dvh.DoseAtVolumePercent(s, 50);
+            double? d98 = dvh.DoseAtVolumePercent(s, 98);
+            double? geud = dvh.gEUD(s, A_TARGET);
+
+            using (var sw = new StreamWriter(file, append: true))
+            {
+                sw.WriteLine(string.Join(",", new[]
+                {
+                    pat.Id,
+                    course.Id,
+                    plan.Id,
+                    s.Id,
+                    s.Name,
+                    s.Volume.ToString("0.###", CultureInfo.InvariantCulture),
+                    DStr(d2),
+                    DStr(d50),
+                    DStr(d98),
+                    DStr(geud)
+                }));
+            }
+        }
+
+        // =======================
+        //   STRUCTURE FINDING
+        // =======================
+
+        private static Structure FindExactStructure(StructureSet ss, string name)
+        {
+            return ss.Structures
+                .FirstOrDefault(s =>
+                    s.Id.Equals(name, StringComparison.OrdinalIgnoreCase) ||
+                    s.Name.Equals(name, StringComparison.OrdinalIgnoreCase));
+        }
+
+        private static Structure FindByAlias(StructureSet ss, string[] aliases)
+        {
+            foreach (var s in ss.Structures)
+            {
+                if (s == null || s.IsEmpty) continue;
+
+                string id = (s.Id ?? "").ToLower();
+                string nm = (s.Name ?? "").ToLower();
+
+                if (aliases.Any(a => id.Contains(a) || nm.Contains(a)))
+                    return s;
+            }
+
+            return null;
+        }
+
+        // ======================
+        //   BUILD EMPTY ROWS
+        // ======================
+
+        private static string BuildEmptyPlanRow(
+            string pid, string course, string plan,
+            string rxId, string rxDetails, int? nFx)
+        {
+            return string.Join(",", new[]
+            {
+                pid, course, plan,
+                rxId, rxDetails,
+                nFx?.ToString() ?? "",
+                "", "", "",
+                "", "", "", "", "", "", "", "", "",
+                "", "", "",
+                "", "", "",
+                "", "", "",
+                "", "", "",
+                "", "", ""
+            });
+        }
+
+        private static string BuildDoseMissingRow(
+            string pid, string course, string plan,
+            string rxId, string rxDetails, int? nFx,
+            Structure gtv, Structure ctv, Structure ptv,
+            Structure brain, Structure brainstem, Structure chiasm)
+        {
+            return string.Join(",", new[]
+            {
+                pid, course, plan,
+                rxId, rxDetails,
+                nFx?.ToString() ?? "",
+                VolStr(gtv), VolStr(ctv), VolStr(ptv),
+                "", "", "", "", "", "", "", "", "",
+                "", "", "",
+                VolStr(brain), "", "",
+                VolStr(brainstem), "", "",
+                VolStr(chiasm), "", "",
+                "", "", ""
+            });
+        }
+
+        // ======================
+        //   STRING HELPERS
+        // ======================
+
         private static string CsvLine(string[] cells)
-            => string.Join(",", cells.Select(EscapeCsv));
+        {
+            return string.Join(",", cells.Select(EscapeCsv));
+        }
 
         private static string EscapeCsv(string s)
         {
             if (s == null) return "";
-            bool needQuotes = s.Contains(",") || s.Contains("\"") || s.Contains("\n") || s.Contains("\r");
-            var t = s.Replace("\"", "\"\"");
-            return needQuotes ? $"\"{t}\"" : t;
+            bool mustQuote = s.Contains(",") || s.Contains("\"") || s.Contains("\n");
+            string t = s.Replace("\"", "\"\"");
+            return mustQuote ? $"\"{t}\"" : t;
         }
 
         private static string VolStr(Structure s)
-            => s == null ? "" : s.Volume.ToString("0.###", CultureInfo.InvariantCulture);
-
-        private static string DStr(double? dGy)
-            => dGy.HasValue ? dGy.Value.ToString("0.###", CultureInfo.InvariantCulture) : "";
-
-        private static Structure FindFirst(StructureSet ss, string[] aliases)
         {
-            if (ss?.Structures == null) return null;
-            foreach (var st in ss.Structures)
-            {
-                if (st == null || st.IsEmpty) continue;
-                var id = (st.Id ?? "").ToLowerInvariant();
-                var name = (st.Name ?? "").ToLowerInvariant();
-                if (aliases.Any(a => id.Contains(a) || name.Contains(a)))
-                    return st;
-            }
-            return null;
+            if (s == null) return "";
+            return s.Volume.ToString("0.###", CultureInfo.InvariantCulture);
         }
 
-        private static (double? D50, double? D98, double? D2, double? gEUD) DoseTripletAndGeud(
-            DvhHelper dvh, Structure s, bool isTarget)
+        private static string DStr(double? d)
         {
-            if (s == null) return (null, null, null, null);
-            var d50 = dvh.DoseAtVolumePercent(s, 50.0);
-            var d98 = dvh.DoseAtVolumePercent(s, 98.0);
-            var d2 = dvh.DoseAtVolumePercent(s, 2.0);
-            double? geud = dvh.gEUD(s, A_TARGET); // only used for targets in this code
-            return (d50, d98, d2, geud);
+            return d.HasValue
+                ? d.Value.ToString("0.###", CultureInfo.InvariantCulture)
+                : "";
+        }
+
+        private static string BuildRxDetails(double? dpf, int? nFx, double? tot)
+        {
+            string fx = nFx.HasValue ? nFx.Value.ToString() : "?";
+            string dp = dpf.HasValue ? dpf.Value.ToString("0.###", CultureInfo.InvariantCulture) : "?";
+            string tt = tot.HasValue ? tot.Value.ToString("0.###", CultureInfo.InvariantCulture) : "?";
+            return $"{tt} Gy total; {fx}Ã—{dp} Gy";
+        }
+
+        // ======================
+        //   DOSE COMPUTATION
+        // ======================
+
+        private static (double? D50, double? D98, double? D2, double? gEUD)
+            DoseTripletAndGeud(DvhHelper dvh, Structure s)
+        {
+            if (s == null)
+                return (null, null, null, null);
+
+            var d50 = dvh.DoseAtVolumePercent(s, 50);
+            var d98 = dvh.DoseAtVolumePercent(s, 98);
+            var d2  = dvh.DoseAtVolumePercent(s, 2);
+            var ge  = dvh.gEUD(s, A_TARGET);
+
+            return (d50, d98, d2, ge);
         }
 
         private static (double? D2, double? D50) D2D50(DvhHelper dvh, Structure s)
         {
             if (s == null) return (null, null);
-            var d2 = dvh.DoseAtVolumePercent(s, 2.0);
-            var d50 = dvh.DoseAtVolumePercent(s, 50.0);
-            return (d2, d50);
+            return (
+                dvh.DoseAtVolumePercent(s, 2),
+                dvh.DoseAtVolumePercent(s, 50)
+            );
         }
 
-        // ======= DVH helper =======
+        // ======================
+        //      DVH HELPER
+        // ======================
+
         private class DvhHelper
         {
             private readonly PlanSetup _plan;
 
-            public DvhHelper(PlanSetup plan) => _plan = plan;
+            public DvhHelper(PlanSetup plan)
+            {
+                _plan = plan;
+            }
+
+            // ===== DOSE AT VOLUME % =====
 
             public double? DoseAtVolumePercent(Structure s, double volPercent)
             {
@@ -326,7 +535,7 @@ namespace GetDataHemangiomas
                         s,
                         DoseValuePresentation.Absolute,
                         VolumePresentation.Relative,
-                        DVH_BIN_GY);   // FIXED
+                        new DoseValue(DVH_BIN_GY, DoseUnit.Gy));  // correct constructor
 
                     if (dvh == null || dvh.CurveData == null || !dvh.CurveData.Any())
                         return null;
@@ -337,20 +546,18 @@ namespace GetDataHemangiomas
                     {
                         if (pt.Volume <= volPercent)
                         {
-                            // First matching point
                             if (!prev.HasValue)
                                 return pt.DoseValue.Dose;
 
-                            // Extract non-nullable values
                             double v1 = prev.Value.Volume;
                             double d1 = prev.Value.DoseValue.Dose;
+
                             double v2 = pt.Volume;
                             double d2 = pt.DoseValue.Dose;
 
                             if (Math.Abs(v2 - v1) < 1e-6)
                                 return d2;
 
-                            // Linear interpolation
                             double t = (volPercent - v1) / (v2 - v1);
                             return d1 + t * (d2 - d1);
                         }
@@ -358,7 +565,7 @@ namespace GetDataHemangiomas
                         prev = pt;
                     }
 
-                    // If threshold not reached ? highest dose
+                    // if threshold never reached â†’ return smallest volume pointâ€™s dose
                     return dvh.CurveData.Last().DoseValue.Dose;
                 }
                 catch
@@ -367,48 +574,55 @@ namespace GetDataHemangiomas
                 }
             }
 
+            // ===== gEUD =====
 
-            // gEUD (Gy) using absolute cm³ DVH
             public double? gEUD(Structure s, double a)
             {
                 var (sumPow, vol) = SumDosePowAndVol(s, a);
-                if (!sumPow.HasValue || !vol.HasValue || vol.Value <= 0) return null;
+
+                if (!sumPow.HasValue || !vol.HasValue || vol.Value <= 0)
+                    return null;
 
                 if (a == 0)
                     return Math.Exp(sumPow.Value / vol.Value);
 
-                var meanPow = sumPow.Value / vol.Value;
+                double meanPow = sumPow.Value / vol.Value;
                 return Math.Pow(Math.Max(meanPow, 0.0), 1.0 / a);
             }
 
-            // ?(v_i * d_i^a) and total volume (cm³)
+            // ===== DIFFERENTIAL-SUM FORM FOR gEUD =====
+
             public (double? sumDosePow, double? totalVol) SumDosePowAndVol(Structure s, double a)
             {
                 try
                 {
-                    if (s == null || s.IsEmpty) return (null, null);
+                    if (s == null || s.IsEmpty)
+                        return (null, null);
 
                     var dvh = _plan.GetDVHCumulativeData(
                         s,
                         DoseValuePresentation.Absolute,
                         VolumePresentation.AbsoluteCm3,
-                        DVH_BIN_GY);
+                        new DoseValue(DVH_BIN_GY, DoseUnit.Gy));
 
                     if (dvh == null || dvh.CurveData == null || dvh.CurveData.Count() < 2)
                         return (null, null);
 
                     var points = dvh.CurveData.ToList();
-                    double totalVol = points.First().Volume;
-                    if (totalVol <= 0) return (null, null);
+                    double totalVol = points.First().Volume; // cmÂ³
+
+                    if (totalVol <= 0)
+                        return (null, null);
 
                     double sum = 0.0;
+
                     for (int i = 1; i < points.Count; i++)
                     {
-                        var vPrev = points[i - 1].Volume;
-                        var vNow = points[i].Volume;
-                        var dNow = points[i].DoseValue.Dose;
+                        double vPrev = points[i - 1].Volume;
+                        double vNow = points[i].Volume;
+                        double dNow = points[i].DoseValue.Dose;
 
-                        var dv = Math.Max(0.0, vPrev - vNow);
+                        double dv = Math.Max(0.0, vPrev - vNow);
                         if (dv <= 0) continue;
 
                         sum += dv * Math.Pow(Math.Max(dNow, 0.0), a);
@@ -422,7 +636,8 @@ namespace GetDataHemangiomas
                 }
             }
 
-            // Absolute cm³ with dose ? doseGy
+            // ===== ABSOLUTE VOLUME ABOVE DOSE =====
+
             public double? VxCm3(Structure s, double doseGy)
             {
                 try
@@ -433,9 +648,9 @@ namespace GetDataHemangiomas
                         s,
                         DoseValuePresentation.Absolute,
                         VolumePresentation.AbsoluteCm3,
-                        DVH_BIN_GY);
+                        new DoseValue(DVH_BIN_GY, DoseUnit.Gy));
 
-                    if (dvh == null || dvh.CurveData == null || !dvh.CurveData.Any())
+                    if (dvh == null || dvh.CurveData == null || dvh.CurveData.Count() == 0)
                         return null;
 
                     DVHPoint? prev = null;
@@ -444,14 +659,13 @@ namespace GetDataHemangiomas
                     {
                         if (pt.DoseValue.Dose >= doseGy)
                         {
-                            // first point at/above threshold
                             if (!prev.HasValue)
                                 return pt.Volume;
 
-                            // use non-nullable doubles for arithmetic
                             double d1 = prev.Value.DoseValue.Dose;
-                            double v1 = prev.Value.Volume;
                             double d2 = pt.DoseValue.Dose;
+
+                            double v1 = prev.Value.Volume;
                             double v2 = pt.Volume;
 
                             if (Math.Abs(d2 - d1) < 1e-6)
@@ -464,7 +678,7 @@ namespace GetDataHemangiomas
                         prev = pt;
                     }
 
-                    // threshold above max dose ? 0 cm³
+                    // threshold > max dose â†’ zero
                     return 0.0;
                 }
                 catch
@@ -472,7 +686,7 @@ namespace GetDataHemangiomas
                     return null;
                 }
             }
+        } // end of DvhHelper
 
-        }
-    }
-}
+    } // end class Program
+} // end namespace
