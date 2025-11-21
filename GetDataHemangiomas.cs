@@ -204,8 +204,8 @@ namespace GetDataHemangiomas
             // Prescription
             string rxId = plan.RTPrescription?.Id ?? "";
             int? nFx = plan.NumberOfFractions;
-            double? dpf = plan.DosePerFraction?.Dose;
-            double? total = plan.TotalDose?.Dose;
+            double? dpf = plan.DosePerFraction.Dose;
+            double? total = plan.TotalDose.Dose;
 
             if (!dpf.HasValue && total.HasValue && nFx.HasValue && nFx > 0)
                 dpf = total / nFx;
@@ -223,15 +223,28 @@ namespace GetDataHemangiomas
             // =========================
 
             // prefix-based expected names
+
             string prefix = planId.Length >= 2 ? planId.Substring(0, 2) : planId;
+            string prefixLong = planId.Length >= 3 ? planId.Substring(0, 3) : planId;
+
 
             string gtvName = $"{prefix}_GTV";
             string ctvName = $"{prefix}_CTV";
             string ptvName = $"{prefix}_PTV";
 
+            string gtvNameAlt = $"{prefixLong}_GTV";
+            string ctvNameAlt = $"{prefixLong}_CTV";
+            string ptvNameAlt = $"{prefixLong}_PTV";
+
             Structure gtv = FindExactStructure(ss, gtvName);
+            if (gtv == null)
+                gtv = FindExactStructure(ss, gtvNameAlt);
             Structure ctv = FindExactStructure(ss, ctvName);
+            if (ctv == null)
+                ctv = FindExactStructure(ss, ctvNameAlt);
             Structure ptv = FindExactStructure(ss, ptvName);
+            if (ptv == null)
+                ptv = FindExactStructure(ss, ptvNameAlt);
 
             // OARs
             Structure brain = FindByAlias(ss, ALIAS_BRAIN);
@@ -287,13 +300,13 @@ namespace GetDataHemangiomas
             var (ptvD50, ptvD98, ptvD2, ptvGeud) = DoseTripletAndGeud(dvh, ptv);
 
             // ====== OAR DOSE METRICS ======
-            var (brainD2, brainD50)         = D2D50(dvh, brain);
+            var (brainD2, brainD50) = D2D50(dvh, brain);
             var (brainstemD2, brainstemD50) = D2D50(dvh, brainstem);
-            var (chiasmD2, chiasmD50)       = D2D50(dvh, chiasm);
+            var (chiasmD2, chiasmD50) = D2D50(dvh, chiasm);
 
-            double? brain_gEUD_a4         = dvh.gEUD(brain, A_BRAIN);
+            double? brain_gEUD_a4 = dvh.gEUD(brain, A_BRAIN);
             double? brainMinusGtv_gEUD_a4 = dvh.gEUD(brainMinusGtv, A_BRAIN);
-            double? brainMinusGtv_V32     = dvh.VxCm3(brainMinusGtv, VX_BRAIN_MINUS_GTV_GY);
+            double? brainMinusGtv_V32 = dvh.VxCm3(brainMinusGtv, VX_BRAIN_MINUS_GTV_GY);
 
             // ====== BUILD MAIN CSV ROW ======
 
@@ -350,7 +363,7 @@ namespace GetDataHemangiomas
 
             string file = Path.Combine(folder, $"{pat.Id}_CandidateTargets.csv");
 
-            double? d2  = dvh.DoseAtVolumePercent(s, 2);
+            double? d2 = dvh.DoseAtVolumePercent(s, 2);
             double? d50 = dvh.DoseAtVolumePercent(s, 50);
             double? d98 = dvh.DoseAtVolumePercent(s, 98);
             double? geud = dvh.gEUD(s, A_TARGET);
@@ -381,8 +394,8 @@ namespace GetDataHemangiomas
         {
             return ss.Structures
                 .FirstOrDefault(s =>
-                    s.Id.Equals(name, StringComparison.OrdinalIgnoreCase) ||
-                    s.Name.Equals(name, StringComparison.OrdinalIgnoreCase));
+                    s.Id.StartsWith(name, StringComparison.OrdinalIgnoreCase) ||
+                    s.Name.StartsWith(name, StringComparison.OrdinalIgnoreCase));
         }
 
         private static Structure FindByAlias(StructureSet ss, string[] aliases)
@@ -495,8 +508,8 @@ namespace GetDataHemangiomas
 
             var d50 = dvh.DoseAtVolumePercent(s, 50);
             var d98 = dvh.DoseAtVolumePercent(s, 98);
-            var d2  = dvh.DoseAtVolumePercent(s, 2);
-            var ge  = dvh.gEUD(s, A_TARGET);
+            var d2 = dvh.DoseAtVolumePercent(s, 2);
+            var ge = dvh.gEUD(s, A_TARGET);
 
             return (d50, d98, d2, ge);
         }
@@ -535,7 +548,7 @@ namespace GetDataHemangiomas
                         s,
                         DoseValuePresentation.Absolute,
                         VolumePresentation.Relative,
-                        new DoseValue(DVH_BIN_GY, DoseUnit.Gy));  // correct constructor
+                        DVH_BIN_GY);  // correct constructor
 
                     if (dvh == null || dvh.CurveData == null || !dvh.CurveData.Any())
                         return null;
@@ -603,7 +616,7 @@ namespace GetDataHemangiomas
                         s,
                         DoseValuePresentation.Absolute,
                         VolumePresentation.AbsoluteCm3,
-                        new DoseValue(DVH_BIN_GY, DoseUnit.Gy));
+                       DVH_BIN_GY);
 
                     if (dvh == null || dvh.CurveData == null || dvh.CurveData.Count() < 2)
                         return (null, null);
@@ -648,7 +661,7 @@ namespace GetDataHemangiomas
                         s,
                         DoseValuePresentation.Absolute,
                         VolumePresentation.AbsoluteCm3,
-                        new DoseValue(DVH_BIN_GY, DoseUnit.Gy));
+                        DVH_BIN_GY);
 
                     if (dvh == null || dvh.CurveData == null || dvh.CurveData.Count() == 0)
                         return null;
