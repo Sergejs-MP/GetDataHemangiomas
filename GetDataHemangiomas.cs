@@ -18,13 +18,12 @@ namespace GetDataHemangiomas
     {
         // ======= CONFIG =======
         private const double DVH_BIN_GY = 0.01;
+        private const string DEFAULT_COURSE_ID = "1";
+        private const string DEFAULT_PLAN_ID = "111_HetDosNose";
 
         // gEUD parameters
         private const double A_TARGET = -10.0;
         private const double A_BRAIN = 4.0;
-
-        // Brain-GTV Vx threshold
-        private const double VX_BRAIN_MINUS_GTV_GY = 32.0;
 
         // Candidate structure search patterns
         private static readonly string[] ALIAS_TARGETS =
@@ -32,24 +31,9 @@ namespace GetDataHemangiomas
             "gtv", "ctv", "ptv"
         };
 
-        private static readonly string[] ALIAS_BRAIN =
+        private static readonly string[] ALIAS_NASAL_CAVITY =
         {
-            "brain", "gehirn", "cerebrum"
-        };
-
-        private static readonly string[] ALIAS_BRAINSTEM =
-        {
-            "brainstem", "gehirnstamm", "medulla"
-        };
-
-        private static readonly string[] ALIAS_CHIASM =
-        {
-            "chiasm", "chiasma", "opt chiasm", "chiasma opticum"
-        };
-
-        private static readonly string[] ALIAS_BRAIN_MINUS_GTV =
-        {
-            "brain-gtv", "brain_minus_gtv"
+            "nasalcavity", "nasal_cavity", "nasal cavity", "nose cavity"
         };
 
         // ======================
@@ -109,6 +93,13 @@ namespace GetDataHemangiomas
                             var plan = course.PlanSetups
                                 .FirstOrDefault(pl => pl.Id.Equals(planId, StringComparison.OrdinalIgnoreCase));
 
+                            if (plan == null &&
+                                planId.Equals(DEFAULT_PLAN_ID, StringComparison.OrdinalIgnoreCase))
+                            {
+                                plan = course.PlanSetups.FirstOrDefault(pl =>
+                                    pl.Id.StartsWith(DEFAULT_PLAN_ID, StringComparison.OrdinalIgnoreCase));
+                            }
+
                             if (plan == null)
                             {
                                 Console.WriteLine($"!! Plan {planId} not found in course {courseId}");
@@ -153,11 +144,15 @@ namespace GetDataHemangiomas
                 if (string.IsNullOrWhiteSpace(raw)) continue;
 
                 var parts = raw.Split(',');
-                if (parts.Length < 3) continue;
+                if (parts.Length == 0) continue;
 
                 var pid = parts[0].Trim();
-                var course = parts[1].Trim();
-                var plan = parts[2].Trim();
+                var course = parts.Length > 1 && !string.IsNullOrWhiteSpace(parts[1])
+                    ? parts[1].Trim()
+                    : DEFAULT_COURSE_ID;
+                var plan = parts.Length > 2 && !string.IsNullOrWhiteSpace(parts[2])
+                    ? parts[2].Trim()
+                    : DEFAULT_PLAN_ID;
 
                 // skip header
                 if (pid.ToLower().Contains("patient")) continue;
@@ -182,10 +177,7 @@ namespace GetDataHemangiomas
                 "CTV_D50","CTV_D98","CTV_D2",
                 "PTV_D50","PTV_D98","PTV_D2",
                 "gEUD_GTV","gEUD_CTV","gEUD_PTV",
-                "Brain_Volume","Brain_D2","Brain_D50",
-                "Brainstem_Volume","Brainstem_D2","Brainstem_D50",
-                "Chiasma_Volume","Chiasm_D2","Chiasm_D50",
-                "Brain_gEUD_a4","BrainMinusGTV_gEUD_a4","BrainMinusGTV_V32Gy_cm3"
+                "NasalCavity_Volume","NasalCavity_Dmean","NasalCavity_D2","NasalCavity_D50","NasalCavity_gEUD_a4"
             };
 
             return string.Join(",", cols);
@@ -246,17 +238,13 @@ namespace GetDataHemangiomas
             if (ptv == null)
                 ptv = FindExactStructure(ss, ptvNameAlt);
 
-            // OARs
-            Structure brain = FindByAlias(ss, ALIAS_BRAIN);
-            Structure brainstem = FindByAlias(ss, ALIAS_BRAINSTEM);
-            Structure chiasm = FindByAlias(ss, ALIAS_CHIASM);
-            Structure brainMinusGtv = FindByAlias(ss, ALIAS_BRAIN_MINUS_GTV);
+            Structure nasalCavity = FindByAlias(ss, ALIAS_NASAL_CAVITY);
 
             bool missingTargets = (gtv == null || ctv == null || ptv == null);
 
             // DVH unavailable => output volume-only row
             if (plan.Dose == null || !plan.IsDoseValid)
-                return BuildDoseMissingRow(pid, courseId, planId, rxId, rxDetails, nFx, gtv, ctv, ptv, brain, brainstem, chiasm);
+                return BuildDoseMissingRow(pid, courseId, planId, rxId, rxDetails, nFx, gtv, ctv, ptv, nasalCavity);
 
             var dvh = new DvhHelper(plan);
 
@@ -299,14 +287,10 @@ namespace GetDataHemangiomas
             var (ctvD50, ctvD98, ctvD2, ctvGeud) = DoseTripletAndGeud(dvh, ctv);
             var (ptvD50, ptvD98, ptvD2, ptvGeud) = DoseTripletAndGeud(dvh, ptv);
 
-            // ====== OAR DOSE METRICS ======
-            var (brainD2, brainD50) = D2D50(dvh, brain);
-            var (brainstemD2, brainstemD50) = D2D50(dvh, brainstem);
-            var (chiasmD2, chiasmD50) = D2D50(dvh, chiasm);
-
-            double? brain_gEUD_a4 = dvh.gEUD(brain, A_BRAIN);
-            double? brainMinusGtv_gEUD_a4 = dvh.gEUD(brainMinusGtv, A_BRAIN);
-            double? brainMinusGtv_V32 = dvh.VxCm3(brainMinusGtv, VX_BRAIN_MINUS_GTV_GY);
+            // ====== NASAL CAVITY DOSE METRICS ======
+            var (nasalD2, nasalD50) = D2D50(dvh, nasalCavity);
+            double? nasalDmean = dvh.MeanDoseGy(nasalCavity);
+            double? nasalGEUD = dvh.gEUD(nasalCavity, A_BRAIN);
 
             // ====== BUILD MAIN CSV ROW ======
 
@@ -324,13 +308,7 @@ namespace GetDataHemangiomas
 
                 DStr(gtvGeud), DStr(ctvGeud), DStr(ptvGeud),
 
-                VolStr(brain), DStr(brainD2), DStr(brainD50),
-                VolStr(brainstem), DStr(brainstemD2), DStr(brainstemD50),
-                VolStr(chiasm), DStr(chiasmD2), DStr(chiasmD50),
-
-                DStr(brain_gEUD_a4),
-                DStr(brainMinusGtv_gEUD_a4),
-                DStr(brainMinusGtv_V32)
+                VolStr(nasalCavity), DStr(nasalDmean), DStr(nasalD2), DStr(nasalD50), DStr(nasalGEUD)
             });
         }
 
@@ -430,10 +408,7 @@ namespace GetDataHemangiomas
                 "", "", "",
                 "", "", "", "", "", "", "", "", "",
                 "", "", "",
-                "", "", "",
-                "", "", "",
-                "", "", "",
-                "", "", ""
+                "", "", "", "", ""
             });
         }
 
@@ -441,7 +416,7 @@ namespace GetDataHemangiomas
             string pid, string course, string plan,
             string rxId, string rxDetails, int? nFx,
             Structure gtv, Structure ctv, Structure ptv,
-            Structure brain, Structure brainstem, Structure chiasm)
+            Structure nasalCavity)
         {
             return string.Join(",", new[]
             {
@@ -451,10 +426,7 @@ namespace GetDataHemangiomas
                 VolStr(gtv), VolStr(ctv), VolStr(ptv),
                 "", "", "", "", "", "", "", "", "",
                 "", "", "",
-                VolStr(brain), "", "",
-                VolStr(brainstem), "", "",
-                VolStr(chiasm), "", "",
-                "", "", ""
+                VolStr(nasalCavity), "", "", "", ""
             });
         }
 
@@ -693,6 +665,48 @@ namespace GetDataHemangiomas
 
                     // threshold > max dose → zero
                     return 0.0;
+                }
+                catch
+                {
+                    return null;
+                }
+            }
+
+
+            public double? MeanDoseGy(Structure s)
+            {
+                try
+                {
+                    if (s == null || s.IsEmpty) return null;
+
+                    var dvh = _plan.GetDVHCumulativeData(
+                        s,
+                        DoseValuePresentation.Absolute,
+                        VolumePresentation.AbsoluteCm3,
+                        DVH_BIN_GY);
+
+                    if (dvh == null || dvh.CurveData == null || dvh.CurveData.Count() < 2)
+                        return null;
+
+                    var points = dvh.CurveData.ToList();
+                    double totalVol = points.First().Volume;
+                    if (totalVol <= 0) return null;
+
+                    double sum = 0.0;
+
+                    for (int i = 1; i < points.Count; i++)
+                    {
+                        double vPrev = points[i - 1].Volume;
+                        double vNow = points[i].Volume;
+                        double dNow = points[i].DoseValue.Dose;
+
+                        double dv = Math.Max(0.0, vPrev - vNow);
+                        if (dv <= 0) continue;
+
+                        sum += dv * dNow;
+                    }
+
+                    return sum / totalVol;
                 }
                 catch
                 {
