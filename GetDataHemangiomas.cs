@@ -19,7 +19,7 @@ namespace GetDataHemangiomas
         // ======= CONFIG =======
         private const double DVH_BIN_GY = 0.01;
         private const string DEFAULT_COURSE_ID = "1";
-        private const string DEFAULT_PLAN_ID = "111_HetDosNose";
+        private const string DEFAULT_PLAN_ID = "111_";
 
         // gEUD parameters
         private const double A_TARGET = -10.0;
@@ -28,7 +28,7 @@ namespace GetDataHemangiomas
         // Candidate structure search patterns
         private static readonly string[] ALIAS_TARGETS =
         {
-            "gtv", "ctv", "ptv"
+            "11_gtv", "11_ctv", "11_ptv"
         };
 
         private static readonly string[] ALIAS_NASAL_CAVITY =
