@@ -23,7 +23,6 @@ namespace GetDataHemangiomas
 
         // gEUD parameters
         private const double A_TARGET = -10.0;
-        private const double A_BRAIN = 4.0;
 
         // Candidate structure search patterns
         private static readonly string[] ALIAS_TARGETS =
@@ -31,9 +30,24 @@ namespace GetDataHemangiomas
             "11_gtv", "11_ctv", "11_ptv"
         };
 
-        private static readonly string[] ALIAS_NASAL_CAVITY =
+        private static readonly string[] ALIAS_BRAIN =
         {
-            "nasalcavity", "nasal_cavity", "nasal cavity", "nose cavity"
+            "brain"
+        };
+
+        private static readonly string[] ALIAS_BRAIN_MINUS_GTV =
+        {
+            "brain-gtv", "brain_gtv", "brain gtv", "brainminusgtv", "brain minus gtv"
+        };
+
+        private static readonly string[] ALIAS_OPTIC_CHIASM =
+        {
+            "opticchiasm", "optic_chiasm", "optic chiasm", "chiasm"
+        };
+
+        private static readonly string[] ALIAS_BRAINSTEM =
+        {
+            "brainstem", "brain_stem", "brain stem"
         };
 
         // ======================
@@ -172,12 +186,13 @@ namespace GetDataHemangiomas
             var cols = new[]
             {
                 "PatientID","CourseID","PlanID","PrescriptionID","PrescriptionDetails","Anz_Fx",
-                "GTV","CTV","PTV",
-                "GTV_D50","GTV_D98","GTV_D2",
-                "CTV_D50","CTV_D98","CTV_D2",
-                "PTV_D50","PTV_D98","PTV_D2",
-                "gEUD_GTV","gEUD_CTV","gEUD_PTV",
-                "NasalCavity_Volume","NasalCavity_Dmean","NasalCavity_D2","NasalCavity_D50","NasalCavity_gEUD_a4"
+                "GTV_Volume","GTV_D2","GTV_D98","GTV_D50",
+                "CTV_Volume","CTV_D2","CTV_D98","CTV_D50",
+                "PTV_Volume","PTV_D2","PTV_D98","PTV_D50",
+                "Brain_Volume","Brain_D2","Brain_D50",
+                "Brain-GTV_Volume","Brain-GTV_D2","Brain-GTV_D50",
+                "OpticChiasm_Volume","OpticChiasm_D2","OpticChiasm_D50",
+                "Brainstem_Volume","Brainstem_D2","Brainstem_D50"
             };
 
             return string.Join(",", cols);
@@ -238,13 +253,19 @@ namespace GetDataHemangiomas
             if (ptv == null)
                 ptv = FindExactStructure(ss, ptvNameAlt);
 
-            Structure nasalCavity = FindByAlias(ss, ALIAS_NASAL_CAVITY);
+            Structure brain = FindByAlias(ss, ALIAS_BRAIN);
+            Structure brainMinusGtv = FindByAlias(ss, ALIAS_BRAIN_MINUS_GTV);
+            Structure opticChiasm = FindByAlias(ss, ALIAS_OPTIC_CHIASM);
+            Structure brainstem = FindByAlias(ss, ALIAS_BRAINSTEM);
 
             bool missingTargets = (gtv == null || ctv == null || ptv == null);
 
             // DVH unavailable => output volume-only row
             if (plan.Dose == null || !plan.IsDoseValid)
-                return BuildDoseMissingRow(pid, courseId, planId, rxId, rxDetails, nFx, gtv, ctv, ptv, nasalCavity);
+                return BuildDoseMissingRow(
+                    pid, courseId, planId, rxId, rxDetails, nFx,
+                    gtv, ctv, ptv,
+                    brain, brainMinusGtv, opticChiasm, brainstem);
 
             var dvh = new DvhHelper(plan);
 
@@ -283,14 +304,14 @@ namespace GetDataHemangiomas
                         .FirstOrDefault();
             }
             // ====== TARGET DOSE METRICS ======
-            var (gtvD50, gtvD98, gtvD2, gtvGeud) = DoseTripletAndGeud(dvh, gtv);
-            var (ctvD50, ctvD98, ctvD2, ctvGeud) = DoseTripletAndGeud(dvh, ctv);
-            var (ptvD50, ptvD98, ptvD2, ptvGeud) = DoseTripletAndGeud(dvh, ptv);
+            var (gtvD2, gtvD98, gtvD50) = D2D98D50(dvh, gtv);
+            var (ctvD2, ctvD98, ctvD50) = D2D98D50(dvh, ctv);
+            var (ptvD2, ptvD98, ptvD50) = D2D98D50(dvh, ptv);
 
-            // ====== NASAL CAVITY DOSE METRICS ======
-            var (nasalD2, nasalD50) = D2D50(dvh, nasalCavity);
-            double? nasalDmean = dvh.MeanDoseGy(nasalCavity);
-            double? nasalGEUD = dvh.gEUD(nasalCavity, A_BRAIN);
+            var (brainD2, brainD50) = D2D50(dvh, brain);
+            var (brainMinusGtvD2, brainMinusGtvD50) = D2D50(dvh, brainMinusGtv);
+            var (opticChiasmD2, opticChiasmD50) = D2D50(dvh, opticChiasm);
+            var (brainstemD2, brainstemD50) = D2D50(dvh, brainstem);
 
             // ====== BUILD MAIN CSV ROW ======
 
@@ -300,15 +321,13 @@ namespace GetDataHemangiomas
                 rxId, rxDetails,
                 nFx?.ToString() ?? "",
 
-                VolStr(gtv), VolStr(ctv), VolStr(ptv),
-
-                DStr(gtvD50), DStr(gtvD98), DStr(gtvD2),
-                DStr(ctvD50), DStr(ctvD98), DStr(ctvD2),
-                DStr(ptvD50), DStr(ptvD98), DStr(ptvD2),
-
-                DStr(gtvGeud), DStr(ctvGeud), DStr(ptvGeud),
-
-                VolStr(nasalCavity), DStr(nasalDmean), DStr(nasalD2), DStr(nasalD50), DStr(nasalGEUD)
+                VolStr(gtv), DStr(gtvD2), DStr(gtvD98), DStr(gtvD50),
+                VolStr(ctv), DStr(ctvD2), DStr(ctvD98), DStr(ctvD50),
+                VolStr(ptv), DStr(ptvD2), DStr(ptvD98), DStr(ptvD50),
+                VolStr(brain), DStr(brainD2), DStr(brainD50),
+                VolStr(brainMinusGtv), DStr(brainMinusGtvD2), DStr(brainMinusGtvD50),
+                VolStr(opticChiasm), DStr(opticChiasmD2), DStr(opticChiasmD50),
+                VolStr(brainstem), DStr(brainstemD2), DStr(brainstemD50)
             });
         }
 
@@ -405,10 +424,13 @@ namespace GetDataHemangiomas
                 pid, course, plan,
                 rxId, rxDetails,
                 nFx?.ToString() ?? "",
+                "", "", "", "",
+                "", "", "", "",
+                "", "", "", "",
                 "", "", "",
-                "", "", "", "", "", "", "", "", "",
                 "", "", "",
-                "", "", "", "", ""
+                "", "", "",
+                "", "", ""
             });
         }
 
@@ -416,17 +438,20 @@ namespace GetDataHemangiomas
             string pid, string course, string plan,
             string rxId, string rxDetails, int? nFx,
             Structure gtv, Structure ctv, Structure ptv,
-            Structure nasalCavity)
+            Structure brain, Structure brainMinusGtv, Structure opticChiasm, Structure brainstem)
         {
             return string.Join(",", new[]
             {
                 pid, course, plan,
                 rxId, rxDetails,
                 nFx?.ToString() ?? "",
-                VolStr(gtv), VolStr(ctv), VolStr(ptv),
-                "", "", "", "", "", "", "", "", "",
-                "", "", "",
-                VolStr(nasalCavity), "", "", "", ""
+                VolStr(gtv), "", "", "",
+                VolStr(ctv), "", "", "",
+                VolStr(ptv), "", "", "",
+                VolStr(brain), "", "",
+                VolStr(brainMinusGtv), "", "",
+                VolStr(opticChiasm), "", "",
+                VolStr(brainstem), "", ""
             });
         }
 
@@ -472,18 +497,17 @@ namespace GetDataHemangiomas
         //   DOSE COMPUTATION
         // ======================
 
-        private static (double? D50, double? D98, double? D2, double? gEUD)
-            DoseTripletAndGeud(DvhHelper dvh, Structure s)
+        private static (double? D2, double? D98, double? D50)
+            D2D98D50(DvhHelper dvh, Structure s)
         {
             if (s == null)
-                return (null, null, null, null);
+                return (null, null, null);
 
-            var d50 = dvh.DoseAtVolumePercent(s, 50);
-            var d98 = dvh.DoseAtVolumePercent(s, 98);
             var d2 = dvh.DoseAtVolumePercent(s, 2);
-            var ge = dvh.gEUD(s, A_TARGET);
+            var d98 = dvh.DoseAtVolumePercent(s, 98);
+            var d50 = dvh.DoseAtVolumePercent(s, 50);
 
-            return (d50, d98, d2, ge);
+            return (d2, d98, d50);
         }
 
         private static (double? D2, double? D50) D2D50(DvhHelper dvh, Structure s)
