@@ -361,3 +361,6 @@ MigrationBackup/
 
 # Fody - auto-generated XML schema
 FodyWeavers.xsd
+
+# Local research inputs and exports (may contain patient identifiers)
+/ValeriaData/
