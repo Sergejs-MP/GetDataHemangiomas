@@ -685,10 +685,12 @@ namespace GetDataHemangiomas
         private sealed class DvhHelper
         {
             private readonly PlanSetup _plan;
+            private readonly double? _binWidth;
 
             public DvhHelper(PlanSetup plan)
             {
                 _plan = plan;
+                _binWidth = GetBinWidthForPlanDoseUnit();
             }
 
             public DvhMetricsResult GetMetrics(Structure structure)
@@ -698,15 +700,14 @@ namespace GetDataHemangiomas
                     if (structure == null || structure.IsEmpty)
                         return new DvhMetricsResult("DVH_UNAVAILABLE");
 
-                    double? binWidth = GetBinWidthForPlanDoseUnit();
-                    if (!binWidth.HasValue)
+                    if (!_binWidth.HasValue)
                         return new DvhMetricsResult("DOSE_UNIT_UNSUPPORTED");
 
                     var dvh = _plan.GetDVHCumulativeData(
                         structure,
                         DoseValuePresentation.Absolute,
                         VolumePresentation.Relative,
-                        binWidth.Value);
+                        _binWidth.Value);
 
                     if (dvh == null || dvh.CurveData == null || !dvh.CurveData.Any())
                         return new DvhMetricsResult("DVH_UNAVAILABLE");
@@ -760,7 +761,44 @@ namespace GetDataHemangiomas
 
             private double? GetBinWidthForPlanDoseUnit()
             {
-                DoseValue.DoseUnit unit = _plan.Dose.DoseMax3D.Unit;
+                DoseValuePresentation originalPresentation =
+                    _plan.DoseValuePresentation;
+                bool presentationChanged =
+                    originalPresentation != DoseValuePresentation.Absolute;
+
+                try
+                {
+                    if (presentationChanged)
+                    {
+                        _plan.DoseValuePresentation =
+                            DoseValuePresentation.Absolute;
+                    }
+
+                    double? totalDoseBinWidth =
+                        GetBinWidthForDoseValue(_plan.TotalDose);
+                    if (totalDoseBinWidth.HasValue)
+                        return totalDoseBinWidth;
+
+                    double? fractionDoseBinWidth =
+                        GetBinWidthForDoseValue(_plan.DosePerFraction);
+                    if (fractionDoseBinWidth.HasValue)
+                        return fractionDoseBinWidth;
+
+                    return GetBinWidthForDoseValue(_plan.Dose.DoseMax3D);
+                }
+                finally
+                {
+                    if (presentationChanged)
+                        _plan.DoseValuePresentation = originalPresentation;
+                }
+            }
+
+            private static double? GetBinWidthForDoseValue(DoseValue doseValue)
+            {
+                if (doseValue.IsUndefined())
+                    return null;
+
+                DoseValue.DoseUnit unit = doseValue.Unit;
 
                 if (unit == DoseValue.DoseUnit.Gy)
                     return DvhBinWidthGy;

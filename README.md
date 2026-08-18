@@ -40,6 +40,12 @@ values are rejected. Each ROI uses one cumulative DVH, and dose metrics are
 exported only when dose and sampling coverage are both at least 99.9% and the
 requested relative volume is bracketed by the curve.
 
+Before selecting the DVH bin width, the helper temporarily sets the plan dose
+presentation to absolute and restores the original presentation afterward. It
+uses the first defined Gy/cGy unit from `TotalDose`, `DosePerFraction`, or
+`DoseMax3D`. The DVH request itself also explicitly requests absolute dose, and
+all exported dose values are normalized to Gy.
+
 The unit and coverage handling follows the official ESAPI 17 documentation for
 [`DoseValue`](https://docs.developer.varian.com/api/17.0/VMS.TPS.Common.Model.Types.DoseValue.html)
 and [`DVHData`](https://docs.developer.varian.com/api/17.0/VMS.TPS.Common.Model.API.DVHData.html).

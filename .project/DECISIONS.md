@@ -18,9 +18,13 @@
   requested relative volume to be bracketed. No boundary value is fabricated.
 - One cumulative DVH is reused for D2, D50, and D60. A failed patient close stops
   further patient opens while preserving one status row per remaining request.
-- The requested DVH bin is 0.01 for Gy grids and 1 for cGy grids, inferred from
-  `DoseMax3D.Unit`; this inference is explicit and requires cGy acceptance
-  testing because ESAPI documentation does not state the bin-width unit.
+- The requested DVH bin is 0.01 for Gy grids and 1 for cGy grids. Unit discovery
+  temporarily sets `DoseValuePresentation` to absolute, checks `TotalDose`,
+  `DosePerFraction`, then `DoseMax3D`, and restores the prior presentation. The
+  DVH call independently requests absolute dose. All returned cGy points are
+  converted to Gy; percent/unknown units remain rejected. Bin-width scaling still
+  requires cGy acceptance testing because ESAPI documentation does not state the
+  bin-width unit.
 - Output is written to a unique same-directory temporary file and atomically
   moved/replaced only after the full batch is serialized.
 - Patient-bearing inputs and exports live in anchored, Git-ignored
