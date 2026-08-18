@@ -439,6 +439,8 @@ namespace GetDataHemangiomas
                     else
                     {
                         DvhMetricsResult metrics = dvh.GetMetrics(structure);
+                        roiResult.DvhCoverage = metrics.Coverage;
+                        roiResult.DvhSamplingCoverage = metrics.SamplingCoverage;
                         roiResult.D2 = metrics.D2Gy;
                         roiResult.D50 = metrics.D50Gy;
                         roiResult.D60 = metrics.D60Gy;
@@ -449,19 +451,33 @@ namespace GetDataHemangiomas
                 result.Rois.Add(roiResult);
             }
 
-            var nonOkRois = result.Rois.Where(r => r.Status != "OK").ToList();
+            var warningRois = result.Rois.Where(
+                r => r.Status == "DVH_COVERAGE_WARNING").ToList();
+            var incompleteRois = result.Rois.Where(
+                r => r.Status != "OK" &&
+                     r.Status != "DVH_COVERAGE_WARNING").ToList();
 
             if (!doseAvailable)
             {
                 result.PlanStatus = "DOSE_UNAVAILABLE";
                 result.Message = "The plan dose is missing or invalid; available ROI volumes were exported.";
             }
-            else if (nonOkRois.Count > 0)
+            else if (incompleteRois.Count > 0)
             {
                 result.PlanStatus = "PARTIAL";
                 result.Message = string.Join(
                     "; ",
-                    nonOkRois.Select(r => r.RequestedRoiId + ":" + r.Status));
+                    result.Rois
+                        .Where(r => r.Status != "OK")
+                        .Select(r => r.RequestedRoiId + ":" + r.Status));
+            }
+            else if (warningRois.Count > 0)
+            {
+                result.PlanStatus = "WARNING";
+                result.Message = string.Join(
+                    "; ",
+                    warningRois.Select(
+                        r => r.RequestedRoiId + ":" + r.Status));
             }
             else
             {
@@ -522,6 +538,8 @@ namespace GetDataHemangiomas
                 columns.Add(roiId + "_D2");
                 columns.Add(roiId + "_D50");
                 columns.Add(roiId + "_D60");
+                columns.Add(roiId + "_DVHCoverage");
+                columns.Add(roiId + "_DVHSamplingCoverage");
             }
 
             return CsvLine(columns);
@@ -548,6 +566,8 @@ namespace GetDataHemangiomas
                 cells.Add(NumberString(roi.D2));
                 cells.Add(NumberString(roi.D50));
                 cells.Add(NumberString(roi.D60));
+                cells.Add(CoverageString(roi.DvhCoverage));
+                cells.Add(CoverageString(roi.DvhSamplingCoverage));
             }
 
             return CsvLine(cells);
@@ -598,6 +618,13 @@ namespace GetDataHemangiomas
         {
             return value.HasValue && IsFinite(value.Value)
                 ? value.Value.ToString("0.###", CultureInfo.InvariantCulture)
+                : "";
+        }
+
+        private static string CoverageString(double? value)
+        {
+            return value.HasValue && IsFinite(value.Value)
+                ? value.Value.ToString("R", CultureInfo.InvariantCulture)
                 : "";
         }
 
@@ -664,6 +691,8 @@ namespace GetDataHemangiomas
             public string RequestedRoiId { get; }
             public string Status { get; set; }
             public double? Volume { get; set; }
+            public double? DvhCoverage { get; set; }
+            public double? DvhSamplingCoverage { get; set; }
             public double? D2 { get; set; }
             public double? D50 { get; set; }
             public double? D60 { get; set; }
@@ -677,6 +706,8 @@ namespace GetDataHemangiomas
             }
 
             public string Status { get; set; }
+            public double? Coverage { get; set; }
+            public double? SamplingCoverage { get; set; }
             public double? D2Gy { get; set; }
             public double? D50Gy { get; set; }
             public double? D60Gy { get; set; }
@@ -712,39 +743,56 @@ namespace GetDataHemangiomas
                     if (dvh == null || dvh.CurveData == null || !dvh.CurveData.Any())
                         return new DvhMetricsResult("DVH_UNAVAILABLE");
 
+                    var result = new DvhMetricsResult("")
+                    {
+                        Coverage = IsFinite(dvh.Coverage)
+                            ? (double?)dvh.Coverage
+                            : null,
+                        SamplingCoverage = IsFinite(dvh.SamplingCoverage)
+                            ? (double?)dvh.SamplingCoverage
+                            : null
+                    };
+
                     if (dvh.CurveData.Any(point =>
                         point.DoseValue.Unit != DoseValue.DoseUnit.Gy &&
                         point.DoseValue.Unit != DoseValue.DoseUnit.cGy))
                     {
-                        return new DvhMetricsResult("DOSE_UNIT_UNSUPPORTED");
+                        result.Status = "DOSE_UNIT_UNSUPPORTED";
+                        return result;
                     }
 
-                    if (!IsFinite(dvh.Coverage) ||
-                        !IsFinite(dvh.SamplingCoverage) ||
-                        dvh.Coverage < MinimumDvhCoverage ||
-                        dvh.SamplingCoverage < MinimumDvhCoverage)
+                    if (!IsValidCoverage(dvh.Coverage) ||
+                        !IsValidCoverage(dvh.SamplingCoverage))
                     {
-                        return new DvhMetricsResult("DVH_INCOMPLETE_COVERAGE");
+                        result.Status = "DVH_COVERAGE_INVALID";
+                        return result;
                     }
 
-                    var result = new DvhMetricsResult("")
-                    {
-                        D2Gy = DoseAtVolumePercentGy(dvh.CurveData, 2),
-                        D50Gy = DoseAtVolumePercentGy(dvh.CurveData, 50),
-                        D60Gy = DoseAtVolumePercentGy(dvh.CurveData, 60)
-                    };
+                    result.D2Gy = DoseAtVolumePercentGy(dvh.CurveData, 2);
+                    result.D50Gy = DoseAtVolumePercentGy(dvh.CurveData, 50);
+                    result.D60Gy = DoseAtVolumePercentGy(dvh.CurveData, 60);
 
-                    if (result.D2Gy.HasValue &&
-                        result.D50Gy.HasValue &&
-                        result.D60Gy.HasValue)
+                    bool coverageComplete =
+                        dvh.Coverage >= MinimumDvhCoverage &&
+                        dvh.SamplingCoverage >= MinimumDvhCoverage;
+                    int metricCount = new[]
                     {
-                        result.Status = "OK";
+                        result.D2Gy,
+                        result.D50Gy,
+                        result.D60Gy
+                    }.Count(value => value.HasValue);
+
+                    if (metricCount == 3)
+                    {
+                        result.Status = coverageComplete
+                            ? "OK"
+                            : "DVH_COVERAGE_WARNING";
                     }
-                    else if (result.D2Gy.HasValue ||
-                             result.D50Gy.HasValue ||
-                             result.D60Gy.HasValue)
+                    else if (metricCount > 0)
                     {
-                        result.Status = "DVH_PARTIAL";
+                        result.Status = coverageComplete
+                            ? "DVH_PARTIAL"
+                            : "DVH_PARTIAL_COVERAGE_WARNING";
                     }
                     else
                     {
@@ -757,6 +805,11 @@ namespace GetDataHemangiomas
                 {
                     return new DvhMetricsResult("DVH_UNAVAILABLE");
                 }
+            }
+
+            private static bool IsValidCoverage(double value)
+            {
+                return IsFinite(value) && value >= 0.0 && value <= 1.0;
             }
 
             private double? GetBinWidthForPlanDoseUnit()

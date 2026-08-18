@@ -9,13 +9,19 @@
 - Plan and `Structure.Id` matching are exact and case-insensitive. Aliases,
   prefixes, candidate selection, and side-effect candidate files are excluded.
 - Output stays wide and preserves one row per input plan. Every requested ROI
-  contributes status, volume, D2, D50, and D60 columns so workbook rows remain
-  directly reconcilable.
+  contributes status, volume, D2, D50, D60, DVH coverage, and DVH sampling
+  coverage columns so workbook rows remain directly reconcilable and coverage
+  warnings remain auditable.
 - Lookup and data failures remain explicit output rows rather than being skipped.
 - Output units are explicit (`cm3`, `Gy`). Absolute cGy values are divided by
   100; unsupported or non-finite dose values remain blank with a status.
-- Dose metrics require both DVH coverage measures to be at least 0.999 and each
-  requested relative volume to be bracketed. No boundary value is fabricated.
+- Dose metrics require valid finite Gy/cGy curve points and the requested
+  relative volume to be bracketed; no boundary value is fabricated. Valid
+  coverage values below the 0.999 project QA threshold retain bracketed metrics
+  with an explicit warning. Non-finite or out-of-range coverage blocks dose
+  export.
+- Plan status is `WARNING` only when every ROI metric is complete and at least
+  one ROI has a coverage warning; missing or partial metrics remain `PARTIAL`.
 - One cumulative DVH is reused for D2, D50, and D60. A failed patient close stops
   further patient opens while preserving one status row per remaining request.
 - The requested DVH bin is 0.01 for Gy grids and 1 for cGy grids. Unit discovery

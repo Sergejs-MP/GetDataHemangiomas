@@ -34,11 +34,25 @@ are not used.
 
 The output preserves one row per input plan and the input order. It includes a
 plan-level status and, for each requested ROI, an ROI status plus volume, D2,
-D50, and D60. `VolumeUnit` is `cm3`; `DoseUnit` is `Gy`. Absolute cGy DVH values
-are converted to Gy, while percent, unknown, undefined, NaN, and infinite dose
-values are rejected. Each ROI uses one cumulative DVH, and dose metrics are
-exported only when dose and sampling coverage are both at least 99.9% and the
-requested relative volume is bracketed by the curve.
+D50, D60, DVH coverage, and DVH sampling coverage. `VolumeUnit` is `cm3`;
+`DoseUnit` is `Gy`. Absolute cGy DVH values are converted to Gy, while percent,
+unknown, undefined, NaN, and infinite dose values are rejected. Each ROI uses
+one cumulative DVH. A dose metric is exported only when its requested relative
+volume is bracketed by the curve and the interpolated value is finite.
+
+Finite coverage values are written exactly as returned by ESAPI using invariant
+round-trip precision. As a project validation rule, the extractor treats 0 to 1
+as the valid range for both coverage fields and retains out-of-range finite
+values only for diagnosis. The project QA threshold remains 0.999 for both
+fields. When both values are valid but either is below that threshold, finite,
+bracketed dose metrics are retained with an explicit coverage-warning status
+instead of being discarded. Invalid or non-finite coverage still blocks dose
+export. Warning rows do not establish whole-ROI dose validity and require
+review before analysis.
+
+The supplied 11-ROI list produces 85 columns: 8 plan fields plus 7 fields per
+ROI. Downstream merges should continue to use header names rather than column
+positions.
 
 Before selecting the DVH bin width, the helper temporarily sets the plan dose
 presentation to absolute and restores the original presentation afterward. It
@@ -60,15 +74,23 @@ case-insensitively: the workbook mixes `_vol` and `_Vol` capitalization.
 
 ## Status values
 
-- `OK`: all requested values were extracted.
-- `PARTIAL`: dose is available, but at least one requested ROI was not fully
-  extracted.
+- `OK`: all requested values were extracted and both coverage fields meet the
+  0.999 QA threshold.
+- `WARNING`: all requested ROI metrics were extracted, but at least one ROI has
+  `DVH_COVERAGE_WARNING`.
+- `PARTIAL`: dose is available, but at least one requested ROI is missing or
+  has incomplete metrics. Coverage warnings for other ROIs remain in the row.
 - `PATIENT_NOT_FOUND`, `COURSE_NOT_FOUND`, `PLAN_NOT_FOUND`: lookup failed.
 - `STRUCTURE_SET_MISSING`: the plan has no structure set.
 - `DOSE_UNAVAILABLE`: volume may be present, but dose is absent or invalid.
 - `ROI_NOT_FOUND`, `ROI_EMPTY`, `ROI_INVALID_VOLUME`: per-ROI structure status.
-- `DVH_PARTIAL`, `DVH_UNAVAILABLE`, `DVH_INCOMPLETE_COVERAGE`: per-ROI DVH
-  status.
+- `DVH_COVERAGE_WARNING`: D2, D50, and D60 were exported, but at least one
+  coverage field is below 0.999.
+- `DVH_PARTIAL_COVERAGE_WARNING`: only some bracketed metrics were exported and
+  at least one coverage field is below 0.999.
+- `DVH_COVERAGE_INVALID`: coverage is non-finite or outside 0 to 1; dose values
+  are left blank.
+- `DVH_PARTIAL`, `DVH_UNAVAILABLE`: per-ROI DVH could not supply every metric.
 - `DOSE_UNIT_UNSUPPORTED`: the absolute dose unit could not be normalized to Gy.
 - `CLOSE_PATIENT_ERROR`: patient cleanup failed; later requests are retained as
   `SESSION_ABORTED` without opening more patients.
